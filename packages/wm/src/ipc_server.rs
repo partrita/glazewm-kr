@@ -8,7 +8,13 @@ use tokio::{
   sync::{broadcast, mpsc},
   task,
 };
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{
+  accept_hdr_async,
+  tungstenite::{
+    handshake::server::{ErrorResponse, Request, Response},
+    Message,
+  },
+};
 use tracing::{info, warn};
 use uuid::Uuid;
 use wm_common::{
@@ -85,9 +91,28 @@ impl IpcServer {
   ) -> anyhow::Result<()> {
     info!("Incoming IPC connection from: {}.", addr);
 
-    let ws_stream = accept_async(stream)
-      .await
-      .context("Error during websocket handshake.")?;
+    let ws_stream = accept_hdr_async(
+      stream,
+      |req: &Request,
+       response: Response|
+       -> Result<Response, ErrorResponse> {
+        // The IPC server does not currently allow requests from browsers.
+        // We can enforce this by checking whether the request has
+        // an `Origin` header, which browsers are required to send.
+        if req.headers().get("origin").is_some() {
+          let err_response = Response::builder()
+            .status(403)
+            .body(Some("Forbidden".to_string().into()))
+            .unwrap();
+
+          return Err(err_response);
+        }
+
+        Ok(response)
+      },
+    )
+    .await
+    .context("Error during websocket handshake.")?;
 
     let (mut outgoing, mut incoming) = ws_stream.split();
     let (response_tx, mut response_rx) = mpsc::unbounded_channel();
